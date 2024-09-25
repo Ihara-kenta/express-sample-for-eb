@@ -1,0 +1,58 @@
+name: Deploy to Elastic Beanstalk
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        role-to-assume: # github-eb role の ARN
+        aws-region: us-east-1
+        audience: sts.amazonaws.com
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v2
+      with:
+        node-version: '21'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Generate deployment package
+      run: zip -r deploy.zip . -x '*.git*'
+
+    - name: Generate unique S3 bucket name
+      id: bucket
+      run: echo "BUCKET_NAME=eb-handson-$(openssl rand -hex 4)" >> $GITHUB_OUTPUT
+
+    - name: Create S3 bucket
+      run: |
+        aws s3 mb s3://${{ steps.bucket.outputs.BUCKET_NAME }} --region us-east-1
+        aws s3api put-bucket-versioning --bucket ${{ steps.bucket.outputs.BUCKET_NAME }} --versioning-configuration Status=Enabled
+
+    - name: Deploy to EB
+      run: |
+        aws s3 cp deploy.zip s3://${{ steps.bucket.outputs.BUCKET_NAME }}/deploy.zip
+        
+        aws elasticbeanstalk create-application-version \
+          --application-name eb-handson \
+          --version-label ${{ github.sha }} \
+          --source-bundle S3Bucket="${{ steps.bucket.outputs.BUCKET_NAME }}",S3Key="deploy.zip"
+        
+        aws elasticbeanstalk update-environment \
+          --application-name eb-handson \
+          --environment-name Eb-handson-env \
+          --version-label ${{ github.sha }}
